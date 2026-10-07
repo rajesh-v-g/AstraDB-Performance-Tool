@@ -1,6 +1,6 @@
 ##  cassandra-go-perf-tool — run `make` to see all targets
 
-PROJECT  := cassandra-go-perf-tool
+PROJECT  := astradb-performance-tool
 CMD      := ./cmd/cassperf
 BIN      := bin/cassperf
 COMPOSE  := podman-compose
