@@ -116,10 +116,15 @@ func runWorker(
 			continue
 		}
 
-		cql := executors[opIdx].Execute(counter)
+		// ExecuteWithArgs returns the CQL with partition-key positions as "?"
+		// placeholders plus the typed key values as bound arguments.
+		// Passing the key as a bound argument — rather than an inlined literal —
+		// lets gocql's TokenAwareHostPolicy hash the partition key and route
+		// directly to the owning replica, matching nosqlbench (cqld4) behaviour.
+		cql, args := executors[opIdx].ExecuteWithArgs(counter)
 
 		start := monotonicNow()
-		err := exec.Query(cql).WithContext(ctx).Exec()
+		err := exec.Query(cql, args...).WithContext(ctx).Exec()
 		elapsed := monotonicSince(start)
 
 		// Ignore context cancellation/deadline errors — these are clean shutdowns,

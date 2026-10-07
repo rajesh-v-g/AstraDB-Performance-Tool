@@ -1,6 +1,7 @@
 package binding_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -113,5 +114,86 @@ func TestCompile_MultipleExecutorsIndependent(t *testing.T) {
 	// Both should produce 'key-0' for counter=0 (seq_key is deterministic).
 	if e1.Execute(0) != e2.Execute(0) {
 		t.Error("two executors produced different seq_key(0)")
+	}
+}
+
+// TestExecuteWithArgs_SeqKey verifies that ExecuteWithArgs emits a "?" placeholder
+// for seq_key and returns the typed key string as a bound argument.
+// This is the core property that enables TokenAwareHostPolicy routing.
+func TestExecuteWithArgs_SeqKey(t *testing.T) {
+	tmpl, err := binding.Compile("INSERT INTO t (k, v) VALUES ({seq_key}, {seq_value})")
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	exec := tmpl.NewExecutor(1000, 32)
+	cql, args := exec.ExecuteWithArgs(7)
+
+	// Partition key must be a "?" placeholder, not an inlined literal.
+	if !strings.Contains(cql, "?") {
+		t.Errorf("ExecuteWithArgs: expected '?' in CQL, got: %q", cql)
+	}
+	if strings.Contains(cql, "'key-7'") {
+		t.Errorf("ExecuteWithArgs: key should not be inlined, got: %q", cql)
+	}
+	// Exactly one bound arg — the key.
+	if len(args) != 1 {
+		t.Fatalf("ExecuteWithArgs: want 1 arg, got %d: %v", len(args), args)
+	}
+	wantKey := "key-7"
+	if got, ok := args[0].(string); !ok || got != wantKey {
+		t.Errorf("ExecuteWithArgs: arg[0] = %v (%T), want %q", args[0], args[0], wantKey)
+	}
+	// The value payload (seq_value) should still be inlined — gocql does not
+	// need it for token routing and it keeps the arg list short.
+	if strings.Contains(cql, "{seq_value}") {
+		t.Errorf("ExecuteWithArgs: seq_value token was not rendered: %q", cql)
+	}
+}
+
+// TestExecuteWithArgs_RWKey verifies that ExecuteWithArgs binds rw_key as an
+// argument and keeps the key within the declared maxKeys range.
+func TestExecuteWithArgs_RWKey(t *testing.T) {
+	tmpl, err := binding.Compile("SELECT * FROM t WHERE k={rw_key}")
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	maxKeys := int64(50)
+	exec := tmpl.NewExecutor(maxKeys, 32)
+	for i := 0; i < 100; i++ {
+		cql, args := exec.ExecuteWithArgs(int64(i))
+		if cql != "SELECT * FROM t WHERE k=?" {
+			t.Errorf("ExecuteWithArgs rw_key: CQL = %q, want %q", cql, "SELECT * FROM t WHERE k=?")
+		}
+		if len(args) != 1 {
+			t.Fatalf("ExecuteWithArgs rw_key: want 1 arg, got %d", len(args))
+		}
+		key, ok := args[0].(string)
+		if !ok {
+			t.Fatalf("arg[0] is %T, want string", args[0])
+		}
+		var n int64
+		if _, err := fmt.Sscanf(key, "key-%d", &n); err != nil {
+			t.Fatalf("rw_key arg %q not parseable: %v", key, err)
+		}
+		if n < 0 || n >= maxKeys {
+			t.Errorf("rw_key %d out of range [0, %d)", n, maxKeys)
+		}
+	}
+}
+
+// TestExecuteWithArgs_LiteralOnly verifies that a template with no binding tokens
+// produces an empty args slice and the original CQL unchanged.
+func TestExecuteWithArgs_LiteralOnly(t *testing.T) {
+	tmpl, err := binding.Compile("SELECT 1")
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	exec := tmpl.NewExecutor(100, 32)
+	cql, args := exec.ExecuteWithArgs(0)
+	if cql != "SELECT 1" {
+		t.Errorf("ExecuteWithArgs literal: CQL = %q, want %q", cql, "SELECT 1")
+	}
+	if len(args) != 0 {
+		t.Errorf("ExecuteWithArgs literal: want 0 args, got %d: %v", len(args), args)
 	}
 }

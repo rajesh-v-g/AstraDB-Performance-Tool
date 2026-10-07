@@ -115,11 +115,16 @@ func newAstraSession(params SessionParams) (*gocql.Session, error) {
 		Password: params.Token,
 	}
 
-	// DC-aware routing is required for Astra; without it gocql may attempt
-	// connections to nodes in other DCs and fail with "no connections were made".
+	// DC-aware + token-aware routing: TokenAwareHostPolicy computes the token
+	// for each query's partition key and sends it directly to the owning replica.
+	// When a rack is partitioned the token map only contains surviving replicas,
+	// so traffic immediately concentrates on the healthy rack — matching the
+	// behaviour of the DataStax Java driver used by nosqlbench (cqld4).
 	if cfg.LocalDC != "" {
 		cluster.PoolConfig.HostSelectionPolicy =
-			gocql.DCAwareRoundRobinPolicy(cfg.LocalDC)
+			gocql.TokenAwareHostPolicy(
+				gocql.DCAwareRoundRobinPolicy(cfg.LocalDC),
+			)
 	}
 
 	keyspace := params.Keyspace
@@ -133,9 +138,18 @@ func newAstraSession(params SessionParams) (*gocql.Session, error) {
 	if params.ConsistencyLevel == "LOCAL_SERIAL" {
 		cluster.SerialConsistency = gocql.LocalSerial
 	}
-	cluster.Timeout = 15 * time.Second
-	cluster.ConnectTimeout = 20 * time.Second
-	cluster.NumConns = 2
+	// Shorter timeouts allow the host pool to detect and penalise a partitioned
+	// node quickly rather than stalling workers for the full OS TCP timeout.
+	// The Java driver detects failure within ~1-2 s via its control-connection
+	// heartbeat; these values approximate that behaviour.
+	cluster.Timeout = 2 * time.Second
+	cluster.ConnectTimeout = 5 * time.Second
+	// More connections per node reduce head-of-line blocking when some nodes are
+	// degraded; 4 matches common Java driver pool minimums.
+	cluster.NumConns = 4
+	// Write coalescing reduces syscall overhead at high ops/s, approximating
+	// the Java driver's request pipelining (nosqlbench pooling=16:16:1024).
+	cluster.WriteCoalesceWaitTime = 200 * time.Microsecond
 
 	return cluster.CreateSession()
 }
@@ -163,9 +177,10 @@ func newCassandraSession(params SessionParams) (*gocql.Session, error) {
 	if params.ConsistencyLevel == "LOCAL_SERIAL" {
 		cluster.SerialConsistency = gocql.LocalSerial
 	}
-	cluster.Timeout = 10 * time.Second
-	cluster.ConnectTimeout = 15 * time.Second
-	cluster.NumConns = 2
+	cluster.Timeout = 2 * time.Second
+	cluster.ConnectTimeout = 5 * time.Second
+	cluster.NumConns = 4
+	cluster.WriteCoalesceWaitTime = 200 * time.Microsecond
 
 	return cluster.CreateSession()
 }

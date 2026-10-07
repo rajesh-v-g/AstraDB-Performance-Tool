@@ -15,6 +15,12 @@ import (
 // b is the output builder to write into.
 type generatorFn func(counter int64, e *Executor, b *strings.Builder)
 
+// argGeneratorFn returns the typed Go value for a partition-key binding so that
+// gocql's TokenAwareHostPolicy can compute the murmur3 token and route the
+// query directly to the owning replica.  Only partition-key generators implement
+// this — value/UUID/timestamp generators remain inlined literals.
+type argGeneratorFn func(counter int64, e *Executor) interface{}
+
 // generators maps token names to their generator functions.
 var generators = map[string]generatorFn{
 	"seq_key":          genSeqKey,
@@ -27,6 +33,15 @@ var generators = map[string]generatorFn{
 	"rw_device_id":     genRWDeviceID,
 	"seq_sensor_value": genSeqSensorValue,
 	"rw_sensor_value":  genRWSensorValue,
+}
+
+// argGenerators provides typed-value producers for partition-key tokens only.
+// Tokens absent from this map (values, UUIDs, timestamps) stay inlined.
+var argGenerators = map[string]argGeneratorFn{
+	"seq_key":       func(counter int64, _ *Executor) interface{} { return fmt.Sprintf("key-%d", counter) },
+	"rw_key":        func(_ int64, e *Executor) interface{} { return fmt.Sprintf("key-%d", e.rng.Int63n(maxOrOne(e.maxKeys))) },
+	"seq_device_id": func(counter int64, e *Executor) interface{} { return counter % maxOrOne(e.maxKeys) },
+	"rw_device_id":  func(_ int64, e *Executor) interface{} { return e.rng.Int63n(maxOrOne(e.maxKeys)) },
 }
 
 func genSeqKey(counter int64, _ *Executor, b *strings.Builder) {
