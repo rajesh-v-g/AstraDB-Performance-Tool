@@ -1,40 +1,48 @@
 ##  cassandra-go-perf-tool — run `make` to see all targets
 
-PROJECT := cassandra-go-perf-tool
-CMD     := ./cmd/cassperf
-BIN     := bin/cassperf
-COMPOSE := podman-compose
+PROJECT  := cassandra-go-perf-tool
+CMD      := ./cmd/cassperf
+BIN      := bin/cassperf
+COMPOSE  := podman-compose
+IMAGE    := rajeshvg/astradb-performance-go
+VERSION  := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+GIT_SHA  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
 export DOCKER_BUILDKIT := 1
 export BUILDAH_FORMAT  := docker
 
 .DEFAULT_GOAL := help
 .PHONY: help build run dev test fmt lint \
-        docker-build docker-run docker-stop docker-status \
+        docker-build docker-push docker-release \
+        docker-run docker-stop docker-status \
         health logs clean
 
 # ─────────────────────────────────────────────────────────────────────────────
 
 help:
 	@echo ""
-	@echo "  cassandra-go-perf-tool"
+	@echo "  cassandra-go-perf-tool  ($(VERSION))"
 	@echo ""
 	@echo "  \033[1mGo\033[0m"
-	@echo "    \033[36mbuild\033[0m         compile static binary → bin/cassperf"
-	@echo "    \033[36mtest\033[0m          run tests with race detector + coverage"
-	@echo "    \033[36mfmt\033[0m           format all Go source files"
-	@echo "    \033[36mlint\033[0m          run golangci-lint"
+	@echo "    \033[36mbuild\033[0m            compile static binary → bin/cassperf"
+	@echo "    \033[36mrun\033[0m              build + run with .env loaded"
+	@echo "    \033[36mdev\033[0m              run in dev mode (web/ served from disk)"
+	@echo "    \033[36mtest\033[0m             run tests with race detector + coverage"
+	@echo "    \033[36mfmt\033[0m              format all Go source files"
+	@echo "    \033[36mlint\033[0m             run golangci-lint"
 	@echo ""
 	@echo "  \033[1mDocker / Podman\033[0m"
-	@echo "    \033[36mdocker-build\033[0m   build the cassperf image"
-	@echo "    \033[36mdocker-run\033[0m     start all 4 services, wait until healthy"
-	@echo "    \033[36mdocker-stop\033[0m    stop + remove all containers"
-	@echo "    \033[36mdocker-status\033[0m  show running/stopped state of each service"
+	@echo "    \033[36mdocker-build\033[0m     build image locally (tagged $(IMAGE):$(VERSION))"
+	@echo "    \033[36mdocker-push\033[0m      push current VERSION tag to Docker Hub"
+	@echo "    \033[36mdocker-release\033[0m   build + push in one step"
+	@echo "    \033[36mdocker-run\033[0m       start all 4 services, wait until healthy"
+	@echo "    \033[36mdocker-stop\033[0m      stop + remove all containers"
+	@echo "    \033[36mdocker-status\033[0m    show running/stopped state of each service"
 	@echo ""
 	@echo "  \033[1mOps\033[0m"
-	@echo "    \033[36mhealth\033[0m        check cassperf is responding"
-	@echo "    \033[36mlogs\033[0m          tail all service logs (Ctrl-C to exit)"
-	@echo "    \033[36mclean\033[0m         remove containers, volumes, image, build artifacts"
+	@echo "    \033[36mhealth\033[0m           check cassperf is responding"
+	@echo "    \033[36mlogs\033[0m             tail all service logs (Ctrl-C to exit)"
+	@echo "    \033[36mclean\033[0m            remove containers, volumes, image, build artifacts"
 	@echo ""
 
 # ── Go ────────────────────────────────────────────────────────────────────────
@@ -62,7 +70,19 @@ lint:
 # ── Docker / Podman ──────────────────────────────────────────────────────────
 
 docker-build:
-	$(COMPOSE) build cassperf
+	docker build \
+	  --build-arg VERSION=$(VERSION) \
+	  --build-arg GIT_SHA=$(GIT_SHA) \
+	  --build-arg BUILD_DATE=$(shell date -u +%Y-%m-%dT%H:%M:%SZ) \
+	  -t $(IMAGE):$(VERSION) \
+	  -t $(IMAGE):latest \
+	  .
+
+docker-push:
+	docker push $(IMAGE):$(VERSION)
+	docker push $(IMAGE):latest
+
+docker-release: docker-build docker-push
 
 docker-run:
 	$(COMPOSE) up --build -d

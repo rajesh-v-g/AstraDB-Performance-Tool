@@ -1,0 +1,158 @@
+name: Release & Push to Docker Hub
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        type: choice
+        options:
+          - patch   # 1.2.3 → 1.2.4
+          - minor   # 1.2.3 → 1.3.0
+          - major   # 1.2.3 → 2.0.0
+        default: patch
+      release_notes:
+        description: "Release notes (markdown, optional — auto-changelog is appended)"
+        required: false
+        type: string
+        default: ""
+
+env:
+  IMAGE: rajeshvg/astradb-performance-go
+
+jobs:
+  release:
+    name: Bump · Tag · Build · Push · Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create git tag + GitHub Release
+      packages: write   # in case GHCR is added later
+
+    steps:
+      # ── 1. Checkout full history so git describe can find the latest tag ───────
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── 2. Calculate the next version from the latest semver tag ──────────────
+      # Finds the highest vX.Y.Z tag reachable from HEAD, strips the "v",
+      # then increments the requested component and resets lower ones to 0.
+      # Falls back to 0.0.0 when no tag exists yet (first ever release).
+      - name: Calculate next version
+        id: next
+        run: |
+          # Get the latest semver tag; fall back to v0.0.0 if none exist yet.
+          LATEST=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' \
+            | sort -V | tail -1)
+          LATEST=${LATEST:-v0.0.0}
+          echo "Latest tag: ${LATEST}"
+
+          # Strip the leading "v" and split into components.
+          VER="${LATEST#v}"
+          MAJOR=$(echo "$VER" | cut -d. -f1)
+          MINOR=$(echo "$VER" | cut -d. -f2)
+          PATCH=$(echo "$VER" | cut -d. -f3)
+
+          case "${{ inputs.bump }}" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          NEXT="${MAJOR}.${MINOR}.${PATCH}"
+          echo "Next version: ${NEXT}"
+          echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${NEXT}"    >> "$GITHUB_OUTPUT"
+
+      # ── 3. Create and push the git tag ────────────────────────────────────────
+      - name: Create git tag
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.next.outputs.tag }}" \
+                  -m "Release ${{ steps.next.outputs.tag }}"
+          git push origin "${{ steps.next.outputs.tag }}"
+
+      # ── 4. Docker metadata — derives all image tags from the new version ───────
+      # v1.2.3 → Docker tags: 1.2.3 · 1.2 · 1 · latest
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.next.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.next.outputs.tag }}
+            type=semver,pattern={{major}},value=${{ steps.next.outputs.tag }}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=astradb-performance-go
+            org.opencontainers.image.description=CQL performance tool for Apache Cassandra and DataStax Astra DB
+            org.opencontainers.image.licenses=Apache-2.0
+
+      # ── 5. QEMU + Buildx for multi-arch (amd64 + arm64) ──────────────────────
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── 6. Login to Docker Hub ────────────────────────────────────────────────
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # ── 7. Build and push ─────────────────────────────────────────────────────
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.next.outputs.version }}
+            GIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── 8. Create GitHub Release ──────────────────────────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.next.outputs.tag }}
+          name: ${{ steps.next.outputs.tag }}
+          body: |
+            ${{ inputs.release_notes }}
+
+            ---
+            ### Docker
+            ```bash
+            docker pull rajeshvg/astradb-performance-go:${{ steps.next.outputs.version }}
+            ```
+
+            ### Full stack (docker compose)
+            ```bash
+            curl -O https://raw.githubusercontent.com/${{ github.repository }}/${{ steps.next.outputs.tag }}/docker-compose.yml
+            docker compose up -d
+            ```
+          draft: false
+          prerelease: false
+          generate_release_notes: true   # auto-appends commit changelog
+
+      # ── 9. Sync README to Docker Hub repository description ──────────────────
+      - name: Update Docker Hub description
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.IMAGE }}
+          readme-filepath: ./README.md
+          short-description: "CQL performance tool for Apache Cassandra and DataStax Astra DB"
