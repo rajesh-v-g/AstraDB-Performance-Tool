@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>cassandra-go-perf-tool</title>
+  <title>Astra Performance Tool</title>
   <script src="/static/js-yaml.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -329,7 +329,8 @@
     }
 
     /* ---- metrics panel ---- */
-    .metrics-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; margin-bottom: 12px; }
+    .metrics-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; margin-bottom: 12px; }
+    .metric-card .val.error { color: var(--red); }
     .metric-card {
       background: var(--bg);
       border: 1px solid var(--border);
@@ -422,7 +423,7 @@
 
 <!-- ===== HEADER ===== -->
 <header>
-  <h1>cassandra-go-perf-tool</h1>
+  <h1>Astra Performance Tool</h1>
   <span id="run-status-badge">⚫ Idle</span>
   <div class="header-spacer"></div>
   <a class="grafana-link" href="http://localhost:3001" target="_blank">Open Grafana ↗</a>
@@ -563,16 +564,22 @@
   <section id="metrics-section">
     <h2>Live Metrics</h2>
     <div class="metrics-grid">
-      <div class="metric-card"><div class="val" id="m-p50">—</div><div class="lbl">P50 ms <span class="tip" data-tip="Median latency — 50% of operations completed faster than this.">?</span></div></div>
-      <div class="metric-card"><div class="val" id="m-p95">—</div><div class="lbl">P95 ms <span class="tip" data-tip="95th percentile — 95% of operations completed faster than this.">?</span></div></div>
-      <div class="metric-card"><div class="val" id="m-p99">—</div><div class="lbl">P99 ms <span class="tip" data-tip="99th percentile — the tail latency most users experience under load.">?</span></div></div>
-      <div class="metric-card"><div class="val" id="m-p999">—</div><div class="lbl">P999 ms <span class="tip" data-tip="99.9th percentile — worst-case outliers. High values indicate GC pauses or hotspots.">?</span></div></div>
+      <div class="metric-card">
+        <div class="val" id="m-ops">—</div>
+        <div class="lbl">ops/sec <span class="tip" data-tip="Operations per second — current throughput across all threads.">?</span></div>
+      </div>
+      <div class="metric-card">
+        <div class="val" id="m-p99">—</div>
+        <div class="lbl">P99 ms <span class="tip" data-tip="99th percentile latency — the tail latency most users experience under load.">?</span></div>
+      </div>
+      <div class="metric-card">
+        <div class="val" id="m-errors">—</div>
+        <div class="lbl">Errors <span class="tip" data-tip="Total CQL errors since the current phase started.">?</span></div>
+      </div>
     </div>
     <div id="metrics-chart"></div>
     <div class="metric-extra">
-      <span>ops/sec <strong id="m-ops">—</strong></span>
       <span>total <strong id="m-total">—</strong></span>
-      <span>errors <strong id="m-errors">—</strong></span>
       <span>phase <strong id="m-phase">—</strong></span>
     </div>
 
@@ -947,8 +954,13 @@ function setStatus(type, msg) {
    Phase timeline
    ===================================================================== */
 function initPhaseTimeline(workload) {
-  // Derive phase list from the selected workload.
-  const phases = (workload?.phases || []).filter(p => p !== 'schema' || !document.getElementById('adv-skip-schema').checked);
+  // Derive phase list from what will actually run.
+  let phases;
+  if (state.selectedPhase !== 'all') {
+    phases = [state.selectedPhase];
+  } else {
+    phases = (workload?.phases || []).filter(p => p !== 'schema' || !document.getElementById('adv-skip-schema').checked);
+  }
   if (!phases.length) return;
 
   state.runPhases = phases;
@@ -1158,13 +1170,13 @@ function openSSE() {
    ===================================================================== */
 function updateMetrics(snap) {
   const fmt = (v) => v != null ? v.toFixed(1) : '—';
-  document.getElementById('m-p50').textContent   = fmt(snap.p50ms);
-  document.getElementById('m-p95').textContent   = fmt(snap.p95ms);
   document.getElementById('m-p99').textContent   = fmt(snap.p99ms);
-  document.getElementById('m-p999').textContent  = fmt(snap.p999ms);
   document.getElementById('m-ops').textContent   = snap.ops_per_sec != null ? Math.round(snap.ops_per_sec).toLocaleString() : '—';
   document.getElementById('m-total').textContent = snap.ops_total != null ? snap.ops_total.toLocaleString() : '—';
-  document.getElementById('m-errors').textContent= snap.error_total ?? '—';
+  const errEl = document.getElementById('m-errors');
+  const errVal = snap.error_total ?? 0;
+  errEl.textContent = errVal.toLocaleString();
+  errEl.className   = 'val' + (errVal > 0 ? ' error' : '');
   document.getElementById('m-phase').textContent = snap.phase || '—';
 
   // Sparkline.

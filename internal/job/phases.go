@@ -132,7 +132,9 @@ func phasesToRun(available []string, requested string, skipSchema bool) []string
 func blocksForPhase(blocks []workload.Block, phase string) []workload.Block {
 	var out []workload.Block
 	for _, b := range blocks {
-		if b.Name == phase || strings.HasPrefix(b.Name, phase+"-") {
+		if b.Name == phase ||
+			strings.HasPrefix(b.Name, phase+"-") ||
+			strings.HasPrefix(b.Name, phase+"_") {
 			out = append(out, b)
 		}
 	}
