@@ -1,6 +1,12 @@
 # syntax=docker/dockerfile:1
+
+# BUILDPLATFORM = the machine running docker build (e.g. linux/arm64 on Apple Silicon)
+# TARGETPLATFORM = the platform the image is being built for (same as BUILDPLATFORM
+#                  for local builds; set by Buildx for CI cross-compilation)
+ARG TARGETARCH
+
 # ── builder stage ─────────────────────────────────────────────────────────────
-FROM golang:1.23-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates
 
@@ -12,15 +18,18 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
-# Copy source and build a fully-static binary (no libc dependency).
+# Copy source and build a fully-static binary.
+# GOARCH is set from Docker's TARGETARCH build arg so the binary matches the
+# target platform exactly — no emulation required for local arm64 builds.
 COPY . .
 
 ARG VERSION=dev
 ARG GIT_SHA=unknown
+ARG TARGETARCH
 
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     go build \
       -trimpath \
       -ldflags="-s -w -X github.com/rajesh-v-g/cassandra-go-perf-tool/internal/config.Version=${VERSION}" \
@@ -33,7 +42,8 @@ RUN mkdir -p /app/scb /app/logs /app/workloads/custom \
  && chown -R 65532:65532 /app
 
 # ── runtime stage ─────────────────────────────────────────────────────────────
-# gcr.io/distroless/static-debian12 is ~2 MB: ca-certificates + tzdata, no shell.
+# distroless/static-debian12 is ~2 MB: ca-certificates + tzdata, no shell.
+# The :nonroot tag runs as uid 65532 — no root inside the container.
 FROM gcr.io/distroless/static-debian12:nonroot
 
 ARG VERSION=dev

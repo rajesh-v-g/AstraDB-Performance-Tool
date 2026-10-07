@@ -50,9 +50,6 @@ services:
       resources:
         limits:
           memory: 512m
-    depends_on:
-      cassandra:
-        condition: service_healthy
     networks:
       - backend
       - frontend

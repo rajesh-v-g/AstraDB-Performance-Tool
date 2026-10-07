@@ -71,7 +71,7 @@ lint:
 # ── Docker / Podman ──────────────────────────────────────────────────────────
 
 # Builds a local-only image tagged cassperf:local.
-# Sets CASSPERF_IMAGE so docker compose uses it instead of pulling from Docker Hub.
+# No --platform flag — Podman/Docker picks the host arch natively (arm64 on Apple Silicon).
 docker-build:
 	docker build \
 	  --build-arg VERSION=$(VERSION) \
@@ -90,14 +90,16 @@ docker-run:
 	CASSPERF_IMAGE=$(shell docker image inspect $(LOCAL_IMAGE):local \
 	  --format '$(LOCAL_IMAGE):local' 2>/dev/null || echo "") \
 	$(COMPOSE) up -d
-	@printf "Waiting for cassperf"; \
-	for i in $$(seq 1 40); do \
+	@printf "Waiting for cassperf to be ready"; \
+	for i in $$(seq 1 20); do \
 	  curl -sf http://localhost:3000/health >/dev/null 2>&1 \
-	    && printf "\n\033[32m▲  up\033[0m  http://localhost:3000  |  Grafana http://localhost:3001\n" \
+	    && printf "\n\033[32m▲  cassperf up\033[0m  http://localhost:3000\n" \
+	    && printf "\033[32m▲  grafana   up\033[0m  http://localhost:3001\n" \
+	    && printf "\033[2m   cassandra is still warming up (~60-120s) — connect once it is ready\033[0m\n" \
 	    && exit 0; \
-	  printf "."; sleep 5; \
+	  printf "."; sleep 3; \
 	done; \
-	printf "\n\033[31m✗  timed out\033[0m\n"; exit 1
+	printf "\n\033[31m✗  timed out — check logs with: make logs\033[0m\n"; exit 1
 
 docker-stop:
 	@podman ps -a --format '{{.Names}}' \
