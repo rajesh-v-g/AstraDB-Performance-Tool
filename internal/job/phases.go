@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -15,9 +16,6 @@ import (
 	"github.com/rajesh-v-g/cassandra-go-perf-tool/internal/store"
 	"github.com/rajesh-v-g/cassandra-go-perf-tool/internal/workload"
 )
-
-// ErrAlreadyRunning is returned by Manager.Start when a run is already active.
-var ErrAlreadyRunning = fmt.Errorf("job: a run is already active")
 
 // WorkloadNotFoundError is returned when the requested workload ID is not in the registry.
 type WorkloadNotFoundError struct{ ID string }
@@ -128,11 +126,13 @@ func phasesToRun(available []string, requested string, skipSchema bool) []string
 	return out
 }
 
-// blocksForPhase returns the blocks whose name contains the phase as a prefix or full match.
+// blocksForPhase returns blocks whose name exactly matches phase or has phase
+// as a dash-delimited prefix (e.g. "main-read" and "main-write" both belong to
+// the "main" phase).
 func blocksForPhase(blocks []workload.Block, phase string) []workload.Block {
 	var out []workload.Block
 	for _, b := range blocks {
-		if b.Name == phase || len(b.Name) > len(phase) && b.Name[:len(phase)] == phase {
+		if b.Name == phase || strings.HasPrefix(b.Name, phase+"-") {
 			out = append(out, b)
 		}
 	}

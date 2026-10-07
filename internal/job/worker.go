@@ -7,6 +7,7 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/rajesh-v-g/cassandra-go-perf-tool/internal/binding"
 	"github.com/rajesh-v-g/cassandra-go-perf-tool/internal/driver"
 	"github.com/rajesh-v-g/cassandra-go-perf-tool/internal/metrics"
 )
@@ -75,6 +76,15 @@ func runWorker(
 	const defaultMaxKeys = 10_000_000
 	const defaultValueSize = 100
 
+	// Pre-create one Executor per op so the hot loop only calls Execute,
+	// not NewExecutor (which allocates a rand.Rand + strings.Builder each time).
+	executors := make([]*binding.Executor, len(ops))
+	for i, e := range ops {
+		if e.template != nil && e.template.Template != nil {
+			executors[i] = e.template.Template.NewExecutor(defaultMaxKeys, defaultValueSize)
+		}
+	}
+
 	opCount := int64(len(ops))
 	counter := int64(workerID) // interleaved start position
 
@@ -99,14 +109,13 @@ func runWorker(
 		opIdx := counter % opCount
 		entry := ops[opIdx]
 
-		if entry.template == nil || entry.template.Template == nil {
+		if executors[opIdx] == nil {
 			counter++
 			localCycles++
 			continue
 		}
 
-		tmplExec := entry.template.Template.NewExecutor(defaultMaxKeys, defaultValueSize)
-		cql := tmplExec.Execute(counter)
+		cql := executors[opIdx].Execute(counter)
 
 		start := monotonicNow()
 		err := exec.Query(cql).WithContext(ctx).Exec()

@@ -122,17 +122,30 @@ func (s *Server) buildRouter() chi.Router {
 // handleHealth responds with the application status.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":  "ok",
-		"version": s.cfg.Version,
-		"uptime":  time.Since(s.cfg.StartTime).Seconds(),
+		"status":     "ok",
+		"version":    s.cfg.Version,
+		"uptime_sec": time.Since(s.cfg.StartTime).Seconds(),
 	})
 }
 
 // ---- CORS middleware --------------------------------------------------------
 
+// allowedOrigins is the set of origins permitted for cross-origin requests.
+// Restrict to localhost development ports; do not use "*" in production because
+// any page could trigger benchmark runs against the server.
+var allowedOrigins = map[string]bool{
+	"http://localhost:3000": true,
+	"http://localhost:3001": true,
+	"http://127.0.0.1:3000": true,
+}
+
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		if allowedOrigins[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {

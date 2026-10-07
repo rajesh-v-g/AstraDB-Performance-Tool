@@ -3,6 +3,7 @@
 package metrics
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -44,6 +45,7 @@ type Collector struct {
 	histograms   [][]*hdrhistogram.Histogram // [workerID][opTypeIndex]
 	opsTotal     atomic.Int64
 	errorTotal   atomic.Int64
+	startMu      sync.RWMutex
 	startTime    time.Time
 	currentPhase atomic.Value // stores string
 	workloadID   atomic.Value // stores string
@@ -111,7 +113,9 @@ func (v *WorkerView) Record(opTypeIndex int, latency time.Duration, err error) {
 // It is safe to call concurrently with workers calling Record.
 // Values are in milliseconds (µs / 1000).
 func (c *Collector) Snapshot() MetricSnapshot {
+	c.startMu.RLock()
 	elapsed := time.Since(c.startTime).Seconds()
+	c.startMu.RUnlock()
 	opsTotal := c.opsTotal.Load()
 	var opsPerSec float64
 	if elapsed > 0 {
@@ -157,7 +161,8 @@ func (c *Collector) Snapshot() MetricSnapshot {
 }
 
 // Reset reinitialises all histograms and zeroes the counters.
-// Called between phases.
+// Called between phases. Must only be called when no workers are running
+// (i.e. between phases, not concurrently with Record).
 func (c *Collector) Reset() {
 	for w := range c.histograms {
 		for o := range c.histograms[w] {
@@ -166,7 +171,9 @@ func (c *Collector) Reset() {
 	}
 	c.opsTotal.Store(0)
 	c.errorTotal.Store(0)
+	c.startMu.Lock()
 	c.startTime = time.Now()
+	c.startMu.Unlock()
 }
 
 // usToMs converts microseconds to milliseconds, rounding to 3 decimal places.

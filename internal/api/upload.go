@@ -1,7 +1,10 @@
 package api
 
 import (
+	"archive/zip"
+	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -64,16 +67,17 @@ func (s *Server) handleUploadSCB(w http.ResponseWriter, r *http.Request) {
 	destName := id + "_" + filepath.Base(header.Filename)
 	destPath := filepath.Join(s.cfg.SCBDir, destName)
 
-	buf := make([]byte, 32<<20)
-	var data []byte
-	for {
-		n, err2 := file.Read(buf)
-		if n > 0 {
-			data = append(data, buf[:n]...)
-		}
-		if err2 != nil {
-			break
-		}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "read upload: "+err.Error())
+		return
+	}
+
+	// Validate that the uploaded bytes are a real zip archive, not just a
+	// file that has been renamed with a .zip extension.
+	if _, err := zip.NewReader(bytes.NewReader(data), int64(len(data))); err != nil {
+		writeError(w, http.StatusBadRequest, "uploaded file is not a valid zip archive")
+		return
 	}
 
 	if err := os.WriteFile(destPath, data, 0o600); err != nil {

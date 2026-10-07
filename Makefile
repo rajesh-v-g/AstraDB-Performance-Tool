@@ -9,7 +9,7 @@ export DOCKER_BUILDKIT := 1
 export BUILDAH_FORMAT  := docker
 
 .DEFAULT_GOAL := help
-.PHONY: help build test fmt lint \
+.PHONY: help build run dev test fmt lint \
         docker-build docker-run docker-stop docker-status \
         health logs clean
 
@@ -42,6 +42,12 @@ help:
 build:
 	@mkdir -p bin
 	CGO_ENABLED=0 go build -o $(BIN) $(CMD)
+
+run: build
+	@set -a; [ -f .env ] && . ./.env; set +a; $(BIN)
+
+dev:
+	@set -a; [ -f .env ] && . ./.env; set +a; go run -tags dev $(CMD)
 
 test:
 	go test ./... -count=1 -race -timeout 60s -coverprofile=coverage.out

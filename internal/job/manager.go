@@ -3,6 +3,7 @@ package job
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -20,6 +21,9 @@ const (
 	StatusIdle    JobStatus = "idle"
 	StatusRunning JobStatus = "running"
 )
+
+// ErrAlreadyRunning is returned by Manager.Start when a run is already active.
+var ErrAlreadyRunning = fmt.Errorf("job: a run is already active")
 
 // RunParams carries all parameters needed to start a benchmark run.
 type RunParams struct {
@@ -190,6 +194,16 @@ func (m *Manager) Stop() {
 
 	aj.cancel()
 	<-aj.done
+}
+
+// ActiveRunID returns the run ID of the currently running job, or "" if idle.
+func (m *Manager) ActiveRunID() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.current != nil {
+		return m.current.runID
+	}
+	return ""
 }
 
 // CurrentCollector returns the metrics collector for the active run, or nil if idle.

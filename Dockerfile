@@ -29,9 +29,6 @@ WORKDIR /app
 
 COPY --from=builder /app/cassperf /app/cassperf
 
-# Built-in YAML workloads embedded in the image
-COPY workloads/ /app/workloads/
-
 # Named volume mount points (custom workloads live here at runtime)
 RUN mkdir -p /app/scb /app/logs /app/workloads/custom
 

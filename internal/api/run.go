@@ -4,11 +4,17 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/rajesh-v-g/cassandra-go-perf-tool/internal/job"
 )
+
+// safeIdentRe validates CQL identifiers (keyspace / table names) that are
+// substituted literally into CQL strings. Only alphanumerics and underscores
+// are permitted — no quotes, semicolons, or spaces.
+var safeIdentRe = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 
 // runRequest is the JSON body for POST /api/v1/run.
 type runRequest struct {
@@ -43,6 +49,12 @@ func (s *Server) handleStartRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Phase == "" {
 		req.Phase = "all"
+	}
+
+	// Validate keyspace name to prevent CQL injection via literal substitution.
+	if req.Keyspace != "" && !safeIdentRe.MatchString(req.Keyspace) {
+		writeError(w, http.StatusBadRequest, "keyspace contains invalid characters (only a-z, A-Z, 0-9, _ allowed)")
+		return
 	}
 
 	// Resolve SCB path from scb_id.
@@ -94,7 +106,12 @@ func (s *Server) handleStartRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleStopRun cancels the active run.
+// Returns "stopped" when a run was cancelled, "idle" when there was nothing to stop.
 func (s *Server) handleStopRun(w http.ResponseWriter, r *http.Request) {
+	if s.manager.Status() == job.StatusIdle {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "idle"})
+		return
+	}
 	s.manager.Stop()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 }
@@ -108,10 +125,11 @@ func (s *Server) handleRunStatus(w http.ResponseWriter, r *http.Request) {
 // The current run log is replayed first so late joiners catch up.
 func (s *Server) handleSSEStream(w http.ResponseWriter, r *http.Request) {
 	replayLog := ""
-	// Best-effort: find the most recent running run and replay its log.
-	runs, err := s.store.List()
-	if err == nil && len(runs) > 0 && runs[0].Status == "running" {
-		replayLog, _ = s.store.GetLog(runs[0].RunID)
+	// Ask the manager for the active run ID under its own lock, then read
+	// the log for that specific ID. This avoids the TOCTOU of listing all
+	// runs and checking the status field of the first entry.
+	if runID := s.manager.ActiveRunID(); runID != "" {
+		replayLog, _ = s.store.GetLog(runID)
 	}
 	s.broadcaster.Subscribe(w, r, replayLog)
 }

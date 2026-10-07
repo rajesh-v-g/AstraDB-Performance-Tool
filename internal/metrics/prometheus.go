@@ -32,13 +32,15 @@ func PrometheusHandler(col *Collector) http.HandlerFunc {
 		fmt.Fprintf(w, "# TYPE cassperf_error_total gauge\n")
 		fmt.Fprintf(w, "cassperf_error_total{workload=%q,phase=%q} %d\n", wl, ph, snap.ErrorTotal)
 
+		// Per the Prometheus text format spec, HELP must immediately precede
+		// TYPE, and both must appear before the first sample for each metric.
 		fmt.Fprintf(w, "# HELP cassperf_latency_p50_ms P50 latency milliseconds\n")
-		fmt.Fprintf(w, "# HELP cassperf_latency_p95_ms P95 latency milliseconds\n")
-		fmt.Fprintf(w, "# HELP cassperf_latency_p99_ms P99 latency milliseconds\n")
-		fmt.Fprintf(w, "# HELP cassperf_latency_p999_ms P999 latency milliseconds\n")
 		fmt.Fprintf(w, "# TYPE cassperf_latency_p50_ms gauge\n")
+		fmt.Fprintf(w, "# HELP cassperf_latency_p95_ms P95 latency milliseconds\n")
 		fmt.Fprintf(w, "# TYPE cassperf_latency_p95_ms gauge\n")
+		fmt.Fprintf(w, "# HELP cassperf_latency_p99_ms P99 latency milliseconds\n")
 		fmt.Fprintf(w, "# TYPE cassperf_latency_p99_ms gauge\n")
+		fmt.Fprintf(w, "# HELP cassperf_latency_p999_ms P999 latency milliseconds\n")
 		fmt.Fprintf(w, "# TYPE cassperf_latency_p999_ms gauge\n")
 
 		for op, ls := range snap.OpBreakdown {

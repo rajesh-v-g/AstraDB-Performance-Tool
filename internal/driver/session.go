@@ -130,6 +130,9 @@ func newAstraSession(params SessionParams) (*gocql.Session, error) {
 		cluster.Keyspace = keyspace
 	}
 	cluster.Consistency = parseConsistency(params.ConsistencyLevel)
+	if params.ConsistencyLevel == "LOCAL_SERIAL" {
+		cluster.SerialConsistency = gocql.LocalSerial
+	}
 	cluster.Timeout = 15 * time.Second
 	cluster.ConnectTimeout = 20 * time.Second
 	cluster.NumConns = 2
@@ -157,6 +160,9 @@ func newCassandraSession(params SessionParams) (*gocql.Session, error) {
 		cluster.Keyspace = params.Keyspace
 	}
 	cluster.Consistency = parseConsistency(params.ConsistencyLevel)
+	if params.ConsistencyLevel == "LOCAL_SERIAL" {
+		cluster.SerialConsistency = gocql.LocalSerial
+	}
 	cluster.Timeout = 10 * time.Second
 	cluster.ConnectTimeout = 15 * time.Second
 	cluster.NumConns = 2
@@ -164,13 +170,21 @@ func newCassandraSession(params SessionParams) (*gocql.Session, error) {
 	return cluster.CreateSession()
 }
 
-// parseConsistency maps a consistency level string to the gocql constant.
+// parseConsistency maps a consistency level string to the gocql Consistency constant.
+// Note: LOCAL_SERIAL is a SerialConsistency used for lightweight transactions (LWT)
+// and is set separately via cluster.SerialConsistency — it is not a valid Consistency
+// value and must not be passed here. Passing "LOCAL_SERIAL" to this function falls
+// through to the default of LOCAL_QUORUM and should be handled by the caller.
 func parseConsistency(s string) gocql.Consistency {
 	switch s {
 	case "LOCAL_ONE":
 		return gocql.LocalOne
-	case "LOCAL_QUORUM", "LOCAL_SERIAL":
+	case "LOCAL_QUORUM":
 		return gocql.LocalQuorum
+	case "ONE":
+		return gocql.One
+	case "QUORUM":
+		return gocql.Quorum
 	case "ALL":
 		return gocql.All
 	default:
