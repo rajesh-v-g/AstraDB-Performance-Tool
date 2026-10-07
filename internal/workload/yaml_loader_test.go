@@ -82,3 +82,28 @@ func TestLoadFile_NotFound(t *testing.T) {
 		t.Error("expected error for non-existent file, got nil")
 	}
 }
+
+func TestLoadFile_Burst(t *testing.T) {
+	path := filepath.Join(workloadsDir(), "cql-burst.yaml")
+	def, err := workload.LoadFile(path, "yaml-builtin")
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if def.ID != "cql-burst" {
+		t.Errorf("ID = %q, want %q", def.ID, "cql-burst")
+	}
+	// Burst has only a main phase — no schema or rampup blocks.
+	if len(def.Phases) != 1 || def.Phases[0] != "main" {
+		t.Errorf("phases = %v, want [main]", def.Phases)
+	}
+	if len(def.Blocks) != 2 {
+		t.Errorf("expected 2 blocks (main-read, main-write), got %d", len(def.Blocks))
+	}
+	// Parameters extracted from TEMPLATE macros.
+	for _, want := range []string{"keyspace", "table", "read_ratio", "write_ratio"} {
+		if _, ok := def.Parameters[want]; !ok {
+			t.Errorf("parameter %q missing; params = %v", want, def.Parameters)
+		}
+	}
+}
+

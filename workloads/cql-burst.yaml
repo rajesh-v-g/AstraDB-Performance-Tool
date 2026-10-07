@@ -1,0 +1,26 @@
+description: |
+  Random burst workload — fires sudden high-rate read/write spikes against
+  the keyvalue table to simulate bursty production traffic patterns.
+  Assumes the keyvalue table already exists and is populated (run cql-keyvalue
+  rampup first). No schema or rampup phase — burst straight into main.
+  Tune burst_rate (ops/sec) and duration in the Advanced panel to control
+  spike intensity and length.
+
+blocks:
+  main-read:
+    ratio: TEMPLATE(read_ratio,7)
+    params:
+      prepared: true
+    ops:
+      select: |
+        SELECT * FROM TEMPLATE(keyspace,test).TEMPLATE(table,keyvalue)
+        WHERE key={rw_key}
+
+  main-write:
+    ratio: TEMPLATE(write_ratio,3)
+    params:
+      prepared: true
+    ops:
+      insert: |
+        INSERT INTO TEMPLATE(keyspace,test).TEMPLATE(table,keyvalue)
+        (key, value) VALUES ({rw_key}, {rw_value})
