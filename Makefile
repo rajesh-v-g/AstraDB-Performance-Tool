@@ -4,16 +4,19 @@ PROJECT  := cassandra-go-perf-tool
 CMD      := ./cmd/cassperf
 BIN      := bin/cassperf
 COMPOSE  := podman-compose
-IMAGE    := rajeshvg/astradb-performance-go
-VERSION  := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-GIT_SHA  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+# Remote image name used for push/release targets.
+IMAGE       := rajeshvg/astradb-performance-go
+# Local image name used by docker-build and docker-run (never pushed).
+LOCAL_IMAGE := cassperf
+VERSION     := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+GIT_SHA     := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
 export DOCKER_BUILDKIT := 1
 export BUILDAH_FORMAT  := docker
 
 .DEFAULT_GOAL := help
 .PHONY: help build run dev test fmt lint \
-        docker-build docker-push docker-release \
+        docker-build \
         docker-run docker-stop docker-status \
         health logs clean
 
@@ -32,9 +35,7 @@ help:
 	@echo "    \033[36mlint\033[0m             run golangci-lint"
 	@echo ""
 	@echo "  \033[1mDocker / Podman\033[0m"
-	@echo "    \033[36mdocker-build\033[0m     build image locally (tagged $(IMAGE):$(VERSION))"
-	@echo "    \033[36mdocker-push\033[0m      push current VERSION tag to Docker Hub"
-	@echo "    \033[36mdocker-release\033[0m   build + push in one step"
+	@echo "    \033[36mdocker-build\033[0m     build local image → $(LOCAL_IMAGE):local (never pushed)"
 	@echo "    \033[36mdocker-run\033[0m       start all 4 services, wait until healthy"
 	@echo "    \033[36mdocker-stop\033[0m      stop + remove all containers"
 	@echo "    \033[36mdocker-status\033[0m    show running/stopped state of each service"
@@ -69,23 +70,26 @@ lint:
 
 # ── Docker / Podman ──────────────────────────────────────────────────────────
 
+# Builds a local-only image tagged cassperf:local.
+# Sets CASSPERF_IMAGE so docker compose uses it instead of pulling from Docker Hub.
 docker-build:
 	docker build \
 	  --build-arg VERSION=$(VERSION) \
 	  --build-arg GIT_SHA=$(GIT_SHA) \
 	  --build-arg BUILD_DATE=$(shell date -u +%Y-%m-%dT%H:%M:%SZ) \
-	  -t $(IMAGE):$(VERSION) \
-	  -t $(IMAGE):latest \
+	  -t $(LOCAL_IMAGE):local \
 	  .
+	@echo ""
+	@echo "  Built $(LOCAL_IMAGE):local"
+	@echo "  Run with: make docker-run   (uses local image automatically)"
+	@echo ""
 
-docker-push:
-	docker push $(IMAGE):$(VERSION)
-	docker push $(IMAGE):latest
-
-docker-release: docker-build docker-push
-
+# If cassperf:local exists (built by docker-build), use it.
+# Otherwise fall back to the published image from .env / docker-compose defaults.
 docker-run:
-	$(COMPOSE) up --build -d
+	CASSPERF_IMAGE=$(shell docker image inspect $(LOCAL_IMAGE):local \
+	  --format '$(LOCAL_IMAGE):local' 2>/dev/null || echo "") \
+	$(COMPOSE) up -d
 	@printf "Waiting for cassperf"; \
 	for i in $$(seq 1 40); do \
 	  curl -sf http://localhost:3000/health >/dev/null 2>&1 \

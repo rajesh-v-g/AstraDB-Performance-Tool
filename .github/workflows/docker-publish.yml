@@ -162,42 +162,59 @@ jobs:
             ${{ inputs.release_notes }}
 
             ---
-            ### Pull from Docker Hub
 
-            **AMD64 (Intel / AMD):**
-            ```bash
-            docker pull ${{ env.IMAGE }}:amd64-${{ needs.tag.outputs.version }}
-            ```
+            ## Option A — cassperf only (bring your own Cassandra / Astra DB)
 
-            **ARM64 (Apple Silicon / Graviton):**
+            Pull and run a single container. Point the UI at any reachable Cassandra node or Astra DB.
+
             ```bash
+            # ARM64 — Apple Silicon (M1 / M2 / M3)
             docker pull ${{ env.IMAGE }}:arm64-${{ needs.tag.outputs.version }}
+            docker run -d --name cassperf -p 3000:3000 -p 9090:9090 \
+              ${{ env.IMAGE }}:arm64-${{ needs.tag.outputs.version }}
+
+            # AMD64 — Intel / AMD
+            docker pull ${{ env.IMAGE }}:amd64-${{ needs.tag.outputs.version }}
+            docker run -d --name cassperf -p 3000:3000 -p 9090:9090 \
+              ${{ env.IMAGE }}:amd64-${{ needs.tag.outputs.version }}
             ```
 
-            ### Run the full stack
+            Open **http://localhost:3000** and enter your connection details.
+
+            ---
+
+            ## Option B — full stack (cassperf + Cassandra + Prometheus + Grafana)
+
+            Download the compose file once, then start everything:
+
             ```bash
-            curl -O https://raw.githubusercontent.com/${{ github.repository }}/${{ needs.tag.outputs.tag }}/docker-compose.yml
-            docker compose up -d
+            # ARM64
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ needs.tag.outputs.tag }}/docker-compose.yml \
+              -o docker-compose.yml
+            ARCH=arm64 VERSION=${{ needs.tag.outputs.version }} docker compose up -d
+
+            # AMD64
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ needs.tag.outputs.tag }}/docker-compose.yml \
+              -o docker-compose.yml
+            ARCH=amd64 VERSION=${{ needs.tag.outputs.version }} docker compose up -d
+            ```
+
+            | Service | URL |
+            |---|---|
+            | cassperf UI + API | http://localhost:3000 |
+            | Grafana dashboard | http://localhost:3001 (admin / admin) |
+            | Prometheus | http://localhost:9091 |
+            | Cassandra | localhost:9042 |
+
+            ---
+
+            ## ⬆️ Upgrade (Option B only)
+
+            ```bash
+            ARCH=arm64 VERSION=${{ needs.tag.outputs.version }} docker compose pull cassperf
+            ARCH=arm64 VERSION=${{ needs.tag.outputs.version }} docker compose up -d cassperf
             ```
           draft: false
           prerelease: false
           generate_release_notes: true
 
-# ── Job 5: sync README to Docker Hub repository description ──────────────────
-  description:
-    name: "5 · Sync Docker Hub description"
-    runs-on: ubuntu-latest
-    needs: build
-
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      - name: Update Docker Hub description
-        uses: peter-evans/dockerhub-description@v4
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-          repository: ${{ env.IMAGE }}
-          readme-filepath: ./README.md
-          short-description: "CQL performance tool for Apache Cassandra and DataStax Astra DB"
