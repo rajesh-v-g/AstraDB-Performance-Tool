@@ -135,7 +135,13 @@ func (m *Manager) Start(params RunParams) (string, error) {
 	col := metrics.NewCollector(threads, opTypes)
 	col.SetWorkload(params.WorkloadID)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if params.Duration > 0 {
+		ctx, cancel = context.WithTimeout(context.Background(), params.Duration)
+	} else {
+		ctx, cancel = context.WithCancel(context.Background())
+	}
 	aj := &activeJob{
 		runID:     runID,
 		cancel:    cancel,

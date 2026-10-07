@@ -264,23 +264,16 @@ func runWorkerPhase(
 	}
 
 	// Worker goroutines via errgroup.
+	// Duration is enforced at the run level (ctx already has the deadline).
 	g, gctx := errgroup.WithContext(ctx)
 
-	// Determine stop condition.
 	cycles := params.Cycles
-	duration := params.Duration
 
 	for w := 0; w < threads; w++ {
 		workerID := w
 		g.Go(func() error {
 			view := col.NewWorkerView(workerID)
-			deadlineCtx := gctx
-			if duration > 0 {
-				var cancel context.CancelFunc
-				deadlineCtx, cancel = context.WithTimeout(gctx, duration)
-				defer cancel()
-			}
-			return runWorker(deadlineCtx, workerID, ops, exec, view, limiter, cycles, int64(threads), logErrFn)
+			return runWorker(gctx, workerID, ops, exec, view, limiter, cycles, int64(threads), logErrFn)
 		})
 	}
 
