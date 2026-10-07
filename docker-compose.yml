@@ -24,10 +24,15 @@ services:
       - backend
 
   cassperf:
-    # Pull the published image by default.
-    # Override with `CASSPERF_IMAGE=cassperf:local` when testing a local build:
+    # Image tag is assembled from ARCH and VERSION defined in your .env file.
+    # Supported values:
+    #   ARCH    = amd64  (Intel / AMD — most servers and desktops)
+    #           | arm64  (Apple Silicon M1/M2/M3, AWS Graviton)
+    #   VERSION = e.g. 1.0.1
+    #
+    # Override entirely for a local build:
     #   CASSPERF_IMAGE=cassperf:local docker compose up
-    image: ${CASSPERF_IMAGE:-rajeshvg/astradb-performance-go:latest}
+    image: ${CASSPERF_IMAGE:-rajeshvg/astradb-performance-go:${ARCH:-arm64}-${VERSION:-latest}}
     ports:
       - "3000:3000"
     volumes:

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: "Version bump type"
+        description: "Version bump"
         required: true
         type: choice
         options:
@@ -13,7 +13,7 @@ on:
           - major   # 1.2.3 → 2.0.0
         default: patch
       release_notes:
-        description: "Release notes (markdown, optional — auto-changelog is appended)"
+        description: "Release notes (optional — auto-changelog is always appended)"
         required: false
         type: string
         default: ""
@@ -21,35 +21,31 @@ on:
 env:
   IMAGE: rajeshvg/astradb-performance-go
 
+# ── Job 1: calculate the next version and create the git tag ──────────────────
 jobs:
-  release:
-    name: Bump · Tag · Build · Push · Release
+  tag:
+    name: "1 · Bump version & create tag"
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # create git tag + GitHub Release
-      packages: write   # in case GHCR is added later
+      contents: write
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+      tag:     ${{ steps.next.outputs.tag }}
 
     steps:
-      # ── 1. Checkout full history so git describe can find the latest tag ───────
-      - name: Checkout source
+      - name: Checkout (full history)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # ── 2. Calculate the next version from the latest semver tag ──────────────
-      # Finds the highest vX.Y.Z tag reachable from HEAD, strips the "v",
-      # then increments the requested component and resets lower ones to 0.
-      # Falls back to 0.0.0 when no tag exists yet (first ever release).
       - name: Calculate next version
         id: next
         run: |
-          # Get the latest semver tag; fall back to v0.0.0 if none exist yet.
-          LATEST=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' \
-            | sort -V | tail -1)
+          # Find the highest existing vX.Y.Z tag; default to v0.0.0 on first run.
+          LATEST=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
           LATEST=${LATEST:-v0.0.0}
-          echo "Latest tag: ${LATEST}"
+          echo "Current latest tag: ${LATEST}"
 
-          # Strip the leading "v" and split into components.
           VER="${LATEST#v}"
           MAJOR=$(echo "$VER" | cut -d. -f1)
           MINOR=$(echo "$VER" | cut -d. -f2)
@@ -66,8 +62,7 @@ jobs:
           echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
           echo "tag=v${NEXT}"    >> "$GITHUB_OUTPUT"
 
-      # ── 3. Create and push the git tag ────────────────────────────────────────
-      - name: Create git tag
+      - name: Create and push git tag
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -75,79 +70,129 @@ jobs:
                   -m "Release ${{ steps.next.outputs.tag }}"
           git push origin "${{ steps.next.outputs.tag }}"
 
-      # ── 4. Docker metadata — derives all image tags from the new version ───────
-      # v1.2.3 → Docker tags: 1.2.3 · 1.2 · 1 · latest
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE }}
-          tags: |
-            type=semver,pattern={{version}},value=${{ steps.next.outputs.tag }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ steps.next.outputs.tag }}
-            type=semver,pattern={{major}},value=${{ steps.next.outputs.tag }}
-            type=raw,value=latest
-          labels: |
-            org.opencontainers.image.title=astradb-performance-go
-            org.opencontainers.image.description=CQL performance tool for Apache Cassandra and DataStax Astra DB
-            org.opencontainers.image.licenses=Apache-2.0
+# ── Job 2: build one image per architecture in parallel ───────────────────────
+# Produces two arch-specific tags:
+#   rajeshvg/astradb-performance-go:amd64-1.0.1
+#   rajeshvg/astradb-performance-go:arm64-1.0.1
+  build:
+    name: "2 · Build ${{ matrix.arch }}-${{ needs.tag.outputs.version }}"
+    runs-on: ubuntu-latest
+    needs: tag
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
 
-      # ── 5. QEMU + Buildx for multi-arch (amd64 + arm64) ──────────────────────
-      - name: Set up QEMU
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (required for arm64 cross-compilation)
+        if: matrix.arch == 'arm64'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # ── 6. Login to Docker Hub ────────────────────────────────────────────────
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # ── 7. Build and push ─────────────────────────────────────────────────────
-      - name: Build and push
+      - name: Build and push (${{ matrix.arch }})
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/${{ matrix.arch }}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          # Tag format: amd64-1.0.1 or arm64-1.0.1
+          tags: ${{ env.IMAGE }}:${{ matrix.arch }}-${{ needs.tag.outputs.version }}
           build-args: |
-            VERSION=${{ steps.next.outputs.version }}
+            VERSION=${{ needs.tag.outputs.version }}
             GIT_SHA=${{ github.sha }}
-            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          # Separate cache keys per arch to avoid cross-contamination.
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
 
-      # ── 8. Create GitHub Release ──────────────────────────────────────────────
+# ── Job 3: bump VERSION in .env.example and commit ───────────────────────────
+  update-env:
+    name: "3 · Update .env.example VERSION"
+    runs-on: ubuntu-latest
+    needs: [tag, build]
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set VERSION in .env
+        run: |
+          sed -i "s/^VERSION=.*/VERSION=${{ needs.tag.outputs.version }}/" .env
+
+      - name: Commit and push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .env
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
+          git commit -m "chore: bump VERSION to ${{ needs.tag.outputs.version }}"
+          git push origin main
+
+# ── Job 4: create the GitHub Release ─────────────────────────────────────────
+  release:
+    name: "4 · Create GitHub Release"
+    runs-on: ubuntu-latest
+    needs: [tag, build]
+    permissions:
+      contents: write
+
+    steps:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.next.outputs.tag }}
-          name: ${{ steps.next.outputs.tag }}
+          tag_name: ${{ needs.tag.outputs.tag }}
+          name:     ${{ needs.tag.outputs.tag }}
           body: |
             ${{ inputs.release_notes }}
 
             ---
-            ### Docker
+            ### Pull from Docker Hub
+
+            **AMD64 (Intel / AMD):**
             ```bash
-            docker pull rajeshvg/astradb-performance-go:${{ steps.next.outputs.version }}
+            docker pull ${{ env.IMAGE }}:amd64-${{ needs.tag.outputs.version }}
             ```
 
-            ### Full stack (docker compose)
+            **ARM64 (Apple Silicon / Graviton):**
             ```bash
-            curl -O https://raw.githubusercontent.com/${{ github.repository }}/${{ steps.next.outputs.tag }}/docker-compose.yml
+            docker pull ${{ env.IMAGE }}:arm64-${{ needs.tag.outputs.version }}
+            ```
+
+            ### Run the full stack
+            ```bash
+            curl -O https://raw.githubusercontent.com/${{ github.repository }}/${{ needs.tag.outputs.tag }}/docker-compose.yml
             docker compose up -d
             ```
           draft: false
           prerelease: false
-          generate_release_notes: true   # auto-appends commit changelog
+          generate_release_notes: true
 
-      # ── 9. Sync README to Docker Hub repository description ──────────────────
+# ── Job 5: sync README to Docker Hub repository description ──────────────────
+  description:
+    name: "5 · Sync Docker Hub description"
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
       - name: Update Docker Hub description
         uses: peter-evans/dockerhub-description@v4
         with:
