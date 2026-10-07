@@ -1,0 +1,105 @@
+services:
+
+  cassandra:
+    image: cassandra:5.0
+    ports:
+      - "9042:9042"
+    environment:
+      - CASSANDRA_CLUSTER_NAME=test-cluster
+      - CASSANDRA_DC=datacenter1
+      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+    healthcheck:
+      test: ["CMD", "cqlsh", "-e", "describe keyspaces"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - backend
+
+  cassperf:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - cgpt_scb:/app/scb
+      - cgpt_logs:/app/logs
+      - cgpt_workloads:/app/workloads/custom
+    environment:
+      - PORT=3000
+      - METRICS_PORT=9090
+      - LOGS_DIR=/app/logs
+      - SCB_DIR=/app/scb
+      - WORKLOADS_DIR=/app/workloads
+      - CUSTOM_WORKLOADS_DIR=/app/workloads/custom
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    networks:
+      - backend
+      - frontend
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    networks:
+      - backend
+      - frontend
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    networks:
+      - backend
+      - frontend
+
+# ── Named volumes ──────────────────────────────────────────────────────────────
+volumes:
+  cgpt_scb:
+  cgpt_logs:
+  cgpt_workloads:
+  prometheus_data:
+  grafana_data:
+  cassandra_data:
+
+# ── Networks ───────────────────────────────────────────────────────────────────
+networks:
+  backend:
+    driver: bridge
+    internal: true          # no outbound internet — container-to-container only
+
+  frontend:
+    driver: bridge          # has a default gateway — cassperf uses this for Astra DB

@@ -1,0 +1,62 @@
+description: |
+  A key-value workload using batched writes for higher write throughput.
+  Inserts multiple rows per CQL BATCH statement during rampup and main phases.
+  Compatible with DataStax Astra DB (cqld4 driver) and vanilla Cassandra (cql driver).
+
+scenarios:
+  astra:
+    schema: run driver=cqld4 tags==block:schema_astra threads==1 cycles==UNDEF
+    rampup: run driver=cqld4 tags==block:rampup cycles===TEMPLATE(rampup-cycles,10000) threads=auto
+    main: run driver=cqld4 tags=='block:main-.*' cycles===TEMPLATE(main-cycles,100000) threads=auto
+    truncate: run driver=cqld4 tags==block:truncate threads==1 cycles==1
+
+blocks:
+  schema_astra:
+    params:
+      prepared: false
+    ops:
+      - |
+        CREATE TABLE IF NOT EXISTS TEMPLATE(keyspace,test).TEMPLATE(table,keyvalue)
+        (key text PRIMARY KEY, value text)
+
+  rampup:
+    params:
+      prepared: true
+    ops:
+      batch_insert: |
+        BEGIN UNLOGGED BATCH
+          INSERT INTO TEMPLATE(keyspace,test).TEMPLATE(table,keyvalue) (key, value) VALUES ({seq_key0}, {seq_value0})
+          INSERT INTO TEMPLATE(keyspace,test).TEMPLATE(table,keyvalue) (key, value) VALUES ({seq_key1}, {seq_value1})
+          INSERT INTO TEMPLATE(keyspace,test).TEMPLATE(table,keyvalue) (key, value) VALUES ({seq_key2}, {seq_value2})
+          INSERT INTO TEMPLATE(keyspace,test).TEMPLATE(table,keyvalue) (key, value) VALUES ({seq_key3}, {seq_value3})
+          INSERT INTO TEMPLATE(keyspace,test).TEMPLATE(table,keyvalue) (key, value) VALUES ({seq_key4}, {seq_value4})
+        APPLY BATCH
+
+  main-read:
+    ratio: TEMPLATE(read_ratio,5)
+    params:
+      prepared: true
+    ops:
+      select: |
+        SELECT * FROM TEMPLATE(keyspace,test).TEMPLATE(table,keyvalue)
+        WHERE key={rw_key}
+
+  main-write:
+    ratio: TEMPLATE(write_ratio,5)
+    params:
+      prepared: true
+    ops:
+      batch_insert: |
+        BEGIN UNLOGGED BATCH
+          INSERT INTO TEMPLATE(keyspace,test).TEMPLATE(table,keyvalue) (key, value) VALUES ({rw_key0}, {rw_value0})
+          INSERT INTO TEMPLATE(keyspace,test).TEMPLATE(table,keyvalue) (key, value) VALUES ({rw_key1}, {rw_value1})
+          INSERT INTO TEMPLATE(keyspace,test).TEMPLATE(table,keyvalue) (key, value) VALUES ({rw_key2}, {rw_value2})
+          INSERT INTO TEMPLATE(keyspace,test).TEMPLATE(table,keyvalue) (key, value) VALUES ({rw_key3}, {rw_value3})
+          INSERT INTO TEMPLATE(keyspace,test).TEMPLATE(table,keyvalue) (key, value) VALUES ({rw_key4}, {rw_value4})
+        APPLY BATCH
+
+  truncate:
+    params:
+      prepared: false
+    ops:
+      - "TRUNCATE TABLE TEMPLATE(keyspace,test).TEMPLATE(table,keyvalue)"

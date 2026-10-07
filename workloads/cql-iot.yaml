@@ -1,0 +1,70 @@
+description: |
+  An IoT time-series workload simulating sensor data ingestion and querying.
+  Writes time-stamped sensor readings (device, time, sensor_value) during rampup,
+  then reads recent readings per device during the main phase.
+  Compatible with DataStax Astra DB (cqld4 driver) and vanilla Cassandra (cql driver).
+
+scenarios:
+  astra:
+    schema: run driver=cqld4 tags==block:schema_astra threads==1 cycles==UNDEF
+    rampup: run driver=cqld4 tags==block:rampup cycles===TEMPLATE(rampup-cycles,10000) threads=auto
+    main: run driver=cqld4 tags=='block:main-.*' cycles===TEMPLATE(main-cycles,100000) threads=auto
+    truncate: run driver=cqld4 tags==block:truncate threads==1 cycles==1
+
+blocks:
+  schema_astra:
+    params:
+      prepared: false
+    ops:
+      - |
+        CREATE TABLE IF NOT EXISTS TEMPLATE(keyspace,test).TEMPLATE(table,iot_sensor_data)
+        (
+          device_id   text,
+          time        timestamp,
+          sensor_value double,
+          PRIMARY KEY (device_id, time)
+        ) WITH CLUSTERING ORDER BY (time DESC)
+
+  rampup:
+    params:
+      prepared: true
+    ops:
+      insert: |
+        INSERT INTO TEMPLATE(keyspace,test).TEMPLATE(table,iot_sensor_data)
+        (device_id, time, sensor_value)
+        VALUES (
+          'device-{seq_device_id}',
+          toTimestamp(now()),
+          {seq_sensor_value}
+        )
+
+  main-read:
+    ratio: TEMPLATE(read_ratio,5)
+    params:
+      prepared: true
+    ops:
+      select_recent: |
+        SELECT device_id, time, sensor_value
+        FROM TEMPLATE(keyspace,test).TEMPLATE(table,iot_sensor_data)
+        WHERE device_id='device-{rw_device_id}'
+        LIMIT TEMPLATE(read_limit,100)
+
+  main-write:
+    ratio: TEMPLATE(write_ratio,5)
+    params:
+      prepared: true
+    ops:
+      insert: |
+        INSERT INTO TEMPLATE(keyspace,test).TEMPLATE(table,iot_sensor_data)
+        (device_id, time, sensor_value)
+        VALUES (
+          'device-{rw_device_id}',
+          toTimestamp(now()),
+          {rw_sensor_value}
+        )
+
+  truncate:
+    params:
+      prepared: false
+    ops:
+      - "TRUNCATE TABLE TEMPLATE(keyspace,test).TEMPLATE(table,iot_sensor_data)"

@@ -1,0 +1,24 @@
+# Build artifacts
+bin/
+coverage.out
+*.out
+*.log
+
+# Git
+.git
+.gitignore
+
+# Env / secrets
+.env
+*.zip
+
+# Dev / editor
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Container data that should never go into the image
+observability/
+cassandra_data/

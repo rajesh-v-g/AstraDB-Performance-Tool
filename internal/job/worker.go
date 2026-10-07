@@ -1,0 +1,123 @@
+package job
+
+import (
+	"context"
+	"fmt"
+	"sync"
+
+	"golang.org/x/time/rate"
+
+	"github.com/rajesh-v-g/cassandra-go-perf-tool/internal/driver"
+	"github.com/rajesh-v-g/cassandra-go-perf-tool/internal/metrics"
+)
+
+// errorSampler deduplicates CQL error messages across workers so that each
+// unique error is surfaced at most maxPerMsg times, keeping the log readable
+// at high ops/sec.
+type errorSampler struct {
+	mu        sync.Mutex
+	seen      map[string]int
+	maxPerMsg int
+}
+
+func newErrorSampler(maxPerMsg int) *errorSampler {
+	return &errorSampler{seen: make(map[string]int), maxPerMsg: maxPerMsg}
+}
+
+// sample returns a formatted log line the first maxPerMsg times a given error
+// message is seen, and "" for subsequent occurrences.
+func (s *errorSampler) sample(errMsg string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := s.seen[errMsg]
+	if n < s.maxPerMsg {
+		s.seen[errMsg]++
+		return fmt.Sprintf("[error] cql: %s", errMsg)
+	}
+	return ""
+}
+
+// runWorker is the hot-path per-goroutine execution loop.
+// It runs until ctx is cancelled, cycles are exhausted, or the rate limiter
+// returns an error.
+//
+// Parameters:
+//   - ctx:       cancellable context; cancel signals stop
+//   - workerID:  unique worker index (used for counter partitioning)
+//   - ops:       flattened list of opEntry values to execute round-robin
+//   - exec:      CQL executor (shared across workers; *gocql.Session is thread-safe)
+//   - view:      per-worker histogram view (no mutex on hot path)
+//   - limiter:   shared rate limiter
+//   - maxCycles: total op count across ALL workers; 0 = unlimited
+//   - nWorkers:  number of workers (used to partition the cycle space)
+//   - logErr:    callback invoked with a formatted error line (already sampled)
+func runWorker(
+	ctx context.Context,
+	workerID int,
+	ops []opEntry,
+	exec driver.Executor,
+	view *metrics.WorkerView,
+	limiter *rate.Limiter,
+	maxCycles int64,
+	nWorkers int64,
+	logErr func(string),
+) error {
+	// Each worker handles a slice of the total cycle space.
+	// If maxCycles == 0, workers run until ctx is cancelled.
+	perWorkerCycles := int64(0)
+	if maxCycles > 0 && nWorkers > 0 {
+		perWorkerCycles = maxCycles / nWorkers
+		if int64(workerID) < maxCycles%nWorkers {
+			perWorkerCycles++
+		}
+	}
+
+	const defaultMaxKeys = 10_000_000
+	const defaultValueSize = 100
+
+	opCount := int64(len(ops))
+	counter := int64(workerID) // interleaved start position
+
+	var localCycles int64
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+
+		if perWorkerCycles > 0 && localCycles >= perWorkerCycles {
+			return nil
+		}
+
+		// Wait for rate limiter token.
+		if err := limiter.Wait(ctx); err != nil {
+			return nil // ctx cancelled
+		}
+
+		// Pick op round-robin.
+		opIdx := counter % opCount
+		entry := ops[opIdx]
+
+		if entry.template == nil || entry.template.Template == nil {
+			counter++
+			localCycles++
+			continue
+		}
+
+		tmplExec := entry.template.Template.NewExecutor(defaultMaxKeys, defaultValueSize)
+		cql := tmplExec.Execute(counter)
+
+		start := monotonicNow()
+		err := exec.Query(cql).WithContext(ctx).Exec()
+		elapsed := monotonicSince(start)
+
+		if err != nil {
+			logErr(err.Error())
+		}
+		view.Record(entry.opTypeIdx, elapsed, err)
+
+		counter += nWorkers
+		localCycles++
+	}
+}
