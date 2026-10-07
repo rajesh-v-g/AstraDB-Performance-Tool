@@ -227,6 +227,10 @@ func runWorkerPhase(
 	}
 
 	// Progress ticker: broadcasts metrics + log summary every 1s.
+	// Use a dedicated cancel so the ticker stops as soon as workers finish
+	// (cycles exhausted), without waiting for the outer ctx to be cancelled.
+	tickerCtx, stopTicker := context.WithCancel(ctx)
+	defer stopTicker()
 	tickerDone := make(chan struct{})
 	go func() {
 		defer close(tickerDone)
@@ -234,7 +238,7 @@ func runWorkerPhase(
 		defer t.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-tickerCtx.Done():
 				return
 			case <-t.C:
 				snap := col.Snapshot()
@@ -281,8 +285,9 @@ func runWorkerPhase(
 	}
 
 	err := g.Wait()
-	// Signal progress ticker to stop and wait for it.
-	// (It also stops via ctx.Done(), but we drain it to avoid goroutine leak.)
+	// Stop the ticker now that all workers have finished (cycles exhausted or
+	// context cancelled), then wait for it to exit cleanly.
+	stopTicker()
 	<-tickerDone
 
 	if err != nil && gctx.Err() != nil {
