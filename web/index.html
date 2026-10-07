@@ -276,6 +276,35 @@
     .scb-row { display: flex; gap: 6px; }
     .scb-row select { flex: 1; }
 
+    /* ===== TOKEN SELECTOR ===== */
+    .token-select-row { display: flex; gap: 6px; margin-bottom: 6px; }
+    .token-select-row select { flex: 1; }
+    #token-add-btn {
+      padding: 7px 11px;
+      font-size: 13px;
+      font-weight: 700;
+      border-radius: 7px;
+      flex-shrink: 0;
+    }
+    /* token save dialog */
+    #token-modal input {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 7px 10px;
+      border-radius: 7px;
+      font-size: 13px;
+      margin-bottom: 10px;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    #token-modal input:focus {
+      outline: none;
+      border-color: rgba(56,189,248,.5);
+      box-shadow: 0 0 0 3px rgba(56,189,248,.1);
+    }
+    #token-modal-error { color: var(--red); font-size: 12px; min-height: 16px; margin-bottom: 6px; }
+
     /* ===== PHASE SELECTOR BUTTONS ===== */
     #phase-buttons { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
     #phase-buttons button {
@@ -549,6 +578,11 @@
       padding: 28px;
       width: 620px;
       max-width: 95vw;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      margin: 0;
     }
     dialog::backdrop { background: rgba(0,0,0,.75); }
     dialog h3 { margin-bottom: 18px; font-size: 16px; font-weight: 700; }
@@ -606,8 +640,17 @@
     <div id="astra-panel">
       <div class="field-row">
         <label>Application Token <span class="tip" data-tip="Generate this in the Astra console under Database → Connect → Generate Token. Starts with AstraCS:">?</span></label>
+        <!-- Saved token selector row -->
+        <div class="token-select-row">
+          <select id="token-select">
+            <option value="">— select saved token —</option>
+          </select>
+          <button class="secondary" id="token-add-btn" title="Save a new token">+</button>
+          <button class="secondary danger" id="token-delete-btn" title="Delete selected token">🗑</button>
+        </div>
+        <!-- Raw token input (shown when no saved token selected, or for one-off use) -->
         <div class="token-row" style="position:relative">
-          <input id="token" type="password" placeholder="AstraCS:..." autocomplete="off" />
+          <input id="token" type="password" placeholder="Or paste token directly…" autocomplete="off" />
           <button class="eye-btn" id="token-eye" title="Toggle visibility">👁</button>
         </div>
       </div>
@@ -788,6 +831,18 @@
   </div>
 </dialog>
 
+<!-- ===== TOKEN MODAL ===== -->
+<dialog id="token-modal">
+  <h3>Save Token</h3>
+  <input id="token-modal-name" type="text" placeholder="Token name (e.g. my-astra-dev)" autocomplete="off" />
+  <input id="token-modal-value" type="password" placeholder="AstraCS:…" autocomplete="off" />
+  <div id="token-modal-error"></div>
+  <div class="modal-footer">
+    <button class="secondary" id="token-modal-cancel">Cancel</button>
+    <button id="token-modal-save">Save</button>
+  </div>
+</dialog>
+
 <script>
 /* =====================================================================
    State
@@ -809,12 +864,93 @@ const state = {
 };
 
 /* =====================================================================
+   Saved Tokens  (stored in localStorage as JSON array of {name, value})
+   ===================================================================== */
+const TOKEN_KEY = 'astra_saved_tokens';
+
+function loadSavedTokens() {
+  try { return JSON.parse(localStorage.getItem(TOKEN_KEY) || '[]'); } catch { return []; }
+}
+
+function saveSavedTokens(tokens) {
+  localStorage.setItem(TOKEN_KEY, JSON.stringify(tokens));
+}
+
+function renderTokenSelect() {
+  const sel = document.getElementById('token-select');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— select saved token —</option>';
+  for (const t of loadSavedTokens()) {
+    const opt = document.createElement('option');
+    opt.value = t.name;
+    opt.textContent = t.name;
+    sel.appendChild(opt);
+  }
+  // Restore previous selection if still present.
+  if (cur && [...sel.options].some(o => o.value === cur)) sel.value = cur;
+  onTokenSelectChange();
+}
+
+function onTokenSelectChange() {
+  const sel = document.getElementById('token-select');
+  const tokenInput = document.getElementById('token');
+  if (sel.value) {
+    const tokens = loadSavedTokens();
+    const found = tokens.find(t => t.name === sel.value);
+    if (found) tokenInput.value = found.value;
+  } else {
+    tokenInput.value = '';
+  }
+  updateRunBtn();
+}
+
+function openTokenModal() {
+  document.getElementById('token-modal-name').value = '';
+  document.getElementById('token-modal-value').value = '';
+  document.getElementById('token-modal-error').textContent = '';
+  document.getElementById('token-modal').showModal();
+  document.getElementById('token-modal-name').focus();
+}
+
+function closeTokenModal() {
+  document.getElementById('token-modal').close();
+}
+
+function saveTokenFromModal() {
+  const name  = document.getElementById('token-modal-name').value.trim();
+  const value = document.getElementById('token-modal-value').value.trim();
+  const errEl = document.getElementById('token-modal-error');
+  if (!name)  { errEl.textContent = 'Name is required.'; return; }
+  if (!value) { errEl.textContent = 'Token value is required.'; return; }
+  if (!value.startsWith('AstraCS:')) { errEl.textContent = 'Token must start with AstraCS:'; return; }
+  const tokens = loadSavedTokens();
+  if (tokens.some(t => t.name === name)) { errEl.textContent = 'A token with that name already exists.'; return; }
+  tokens.push({ name, value });
+  saveSavedTokens(tokens);
+  closeTokenModal();
+  renderTokenSelect();
+  // Auto-select the newly saved token.
+  document.getElementById('token-select').value = name;
+  onTokenSelectChange();
+}
+
+function deleteSelectedToken() {
+  const sel = document.getElementById('token-select');
+  if (!sel.value) return;
+  if (!confirm(`Delete token "${sel.value}"?`)) return;
+  const tokens = loadSavedTokens().filter(t => t.name !== sel.value);
+  saveSavedTokens(tokens);
+  renderTokenSelect();
+}
+
+/* =====================================================================
    Boot
    ===================================================================== */
 document.addEventListener('DOMContentLoaded', () => {
   loadWorkloads();
   loadSCBList();
   loadHistory();
+  renderTokenSelect();
   wireUI();
 });
 
@@ -987,6 +1123,15 @@ function wireUI() {
   document.getElementById('token-eye').addEventListener('click', () => togglePw('token', 'token-eye'));
   document.getElementById('cass-eye').addEventListener('click', () => togglePw('cass-pass', 'cass-eye'));
 
+  // Saved token selector.
+  document.getElementById('token-select').addEventListener('change', onTokenSelectChange);
+  document.getElementById('token-add-btn').addEventListener('click', openTokenModal);
+  document.getElementById('token-delete-btn').addEventListener('click', deleteSelectedToken);
+  document.getElementById('token-modal-cancel').addEventListener('click', closeTokenModal);
+  document.getElementById('token-modal-save').addEventListener('click', saveTokenFromModal);
+  document.getElementById('token-modal-name').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('token-modal-value').focus(); });
+  document.getElementById('token-modal-value').addEventListener('keydown', e => { if (e.key === 'Enter') saveTokenFromModal(); });
+
   // SCB upload.
   document.getElementById('scb-upload-btn').addEventListener('click', () =>
     document.getElementById('scb-file-input').click()
@@ -994,7 +1139,11 @@ function wireUI() {
   document.getElementById('scb-file-input').addEventListener('change', uploadSCB);
   document.getElementById('scb-delete-btn').addEventListener('click', deleteSCB);
   document.getElementById('scb-select').addEventListener('change', updateRunBtn);
-  document.getElementById('token').addEventListener('input', updateRunBtn);
+  document.getElementById('token').addEventListener('input', () => {
+    // If user types directly, clear the saved-token selection.
+    document.getElementById('token-select').value = '';
+    updateRunBtn();
+  });
 
   // Run / Stop.
   document.getElementById('run-btn').addEventListener('click', startRun);
