@@ -2,6 +2,7 @@ package job
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -121,10 +122,14 @@ func runWorker(
 		err := exec.Query(cql).WithContext(ctx).Exec()
 		elapsed := monotonicSince(start)
 
-		if err != nil {
+		// Ignore context cancellation/deadline errors — these are clean shutdowns,
+		// not real CQL failures. Don't log or count them as errors.
+		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			logErr(err.Error())
+			view.Record(entry.opTypeIdx, elapsed, err)
+		} else if err == nil {
+			view.Record(entry.opTypeIdx, elapsed, nil)
 		}
-		view.Record(entry.opTypeIdx, elapsed, err)
 
 		counter += nWorkers
 		localCycles++
